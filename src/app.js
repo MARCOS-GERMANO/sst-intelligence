@@ -1,0 +1,374 @@
+// ================== Supabase ==================
+const supabaseClient = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+
+// ================== DOM refs ==================
+const loginScreen = document.getElementById('login-screen');
+const appShell = document.getElementById('app-shell');
+const loginForm = document.getElementById('login-form');
+const loginError = document.getElementById('login-error');
+const userInfo = document.getElementById('user-info');
+const content = document.getElementById('content');
+const title = document.getElementById('title');
+
+let currentUser = null;
+const CHECKLIST_ITEMS_NR18 = ['Guarda-corpo e proteção contra quedas', 'Organização do canteiro', 'Instalações elétricas', 'Uso adequado de EPI'];
+let activeInspection = null; // {id, code, items:[description,...]}
+
+// ================== Autenticação ==================
+async function boot() {
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  session ? showApp(session.user) : showLogin();
+  supabaseClient.auth.onAuthStateChange((_event, session) => {
+    session ? showApp(session.user) : showLogin();
+  });
+}
+
+function showLogin() {
+  currentUser = null;
+  loginScreen.style.display = 'flex';
+  appShell.style.display = 'none';
+}
+
+async function showApp(user) {
+  currentUser = user;
+  loginScreen.style.display = 'none';
+  appShell.style.display = 'flex';
+  await loadUserInfo();
+  dashboard();
+}
+
+async function loadUserInfo() {
+  const { data } = await supabaseClient.from('profiles').select('full_name, role').eq('id', currentUser.id).single();
+  const name = data?.full_name || currentUser.email;
+  const role = data?.role ? data.role.toUpperCase() : '';
+  userInfo.innerHTML = `${name} <span>${role}</span> <button id="logout-btn">Sair</button>`;
+  document.getElementById('logout-btn').onclick = () => supabaseClient.auth.signOut();
+}
+
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  loginError.textContent = '';
+  const email = document.getElementById('login-email').value;
+  const password = document.getElementById('login-password').value;
+  const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+  if (error) loginError.textContent = 'E-mail ou senha inválidos.';
+});
+
+// ================== Acesso a dados ==================
+async function fetchSites() {
+  const { data, error } = await supabaseClient.from('sites').select('*').order('created_at');
+  if (error) console.error(error);
+  return data || [];
+}
+async function fetchWorkers() {
+  const { data, error } = await supabaseClient.from('workers').select('*, sites(name)').order('created_at');
+  if (error) console.error(error);
+  return data || [];
+}
+async function fetchInspections() {
+  const { data, error } = await supabaseClient.from('inspections').select('*, sites(name)').order('created_at', { ascending: false });
+  if (error) console.error(error);
+  return data || [];
+}
+async function fetchNCs() {
+  const { data, error } = await supabaseClient.from('non_conformities').select('*, sites(name)').order('created_at', { ascending: false });
+  if (error) console.error(error);
+  return data || [];
+}
+
+// ================== Render helpers ==================
+function table(rows, heads) {
+  if (!rows.length) return `<div class="empty">Nenhum registro encontrado.</div>`;
+  return `<table class="table"><thead><tr>${heads.map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((x, i) => `<td>${i >= 3 ? `<span class="badge ${String(x).includes('CRITICAL') || String(x).includes('OPEN') ? 'red' : String(x).includes('HIGH') || String(x).includes('IN_PROGRESS') ? 'amber' : String(x).includes('COMPLETED') || String(x).includes('Ativa') || String(x).includes('RESOLVED') ? 'green' : ''}">${x}</span>` : x}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+function loading() { content.innerHTML = `<div class="empty">Carregando...</div>`; }
+function friendlyError(error) {
+  if (!error) return '';
+  if (String(error.message).toLowerCase().includes('row-level security')) {
+    return 'Você não tem permissão para esta ação (restrito a admin/TST).';
+  }
+  return error.message;
+}
+
+// ================== Páginas ==================
+async function dashboard() {
+  title.textContent = 'Dashboard';
+  loading();
+  const [sites, workers, inspections, ncs] = await Promise.all([fetchSites(), fetchWorkers(), fetchInspections(), fetchNCs()]);
+  const activeSites = sites.filter(s => s.status === 'Ativa').length;
+  const activeWorkers = workers.filter(w => w.status === 'Ativo').length;
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const inspectionsThisMonth = inspections.filter(i => (i.inspection_date || '').startsWith(thisMonth)).length;
+  const openNCs = ncs.filter(n => n.status !== 'RESOLVED');
+  const critical = openNCs.filter(n => n.priority === 'CRITICAL').length;
+  const rows = openNCs.slice(0, 5).map(n => [n.code, n.sites?.name || '-', n.description, n.priority, n.status]);
+
+  content.innerHTML = `<div class="grid">
+    <div class="card"><div class="label">OBRAS ATIVAS</div><div class="metric">${activeSites}</div></div>
+    <div class="card"><div class="label">TRABALHADORES ATIVOS</div><div class="metric">${activeWorkers}</div></div>
+    <div class="card"><div class="label">INSPEÇÕES NO MÊS</div><div class="metric">${inspectionsThisMonth}</div></div>
+    <div class="card"><div class="label">NCs ABERTAS</div><div class="metric danger">${openNCs.length}</div></div>
+  </div>
+  <div class="section"><h2>Indicadores de controle</h2><div class="grid">
+    <div class="card"><div class="label">CRÍTICAS</div><div class="metric danger">${critical}</div></div>
+    <div class="card"><div class="label">TOTAL DE NCs</div><div class="metric">${ncs.length}</div></div>
+    <div class="card"><div class="label">RESOLVIDAS</div><div class="metric success">${ncs.length - openNCs.length}</div></div>
+    <div class="card"><div class="label">OBRAS</div><div class="metric">${sites.length}</div></div>
+  </div></div>
+  <div class="section"><h2>Últimas não conformidades</h2>${table(rows, ['Código', 'Obra', 'Descrição', 'Prioridade', 'Status'])}</div>`;
+}
+
+async function sitesPage() {
+  title.textContent = 'Obras';
+  loading();
+  const sites = await fetchSites();
+  content.innerHTML = `<div class="actions"><button class="btn" onclick="newSite()">+ Novo registro</button></div>${sitesTable(sites)}`;
+}
+
+function sitesTable(sites) {
+  if (!sites.length) return `<div class="empty">Nenhum registro encontrado.</div>`;
+  return `<table class="table"><thead><tr><th>Obra</th><th>Código</th><th>Status</th><th>Responsável</th><th></th></tr></thead><tbody>
+    ${sites.map(s => `<tr><td>${s.name}</td><td>${s.code}</td><td><span class="badge ${s.status === 'Ativa' ? 'green' : ''}">${s.status}</span></td><td>${s.responsible_team || '-'}</td>
+      <td><button class="btn secondary" onclick="editSite('${s.id}')">Editar</button></td></tr>`).join('')}
+  </tbody></table>`;
+}
+
+function newSite() {
+  title.textContent = 'Nova obra';
+  content.innerHTML = `<div class="form">
+    <label>Nome<input id="site-name" placeholder="Ex.: Obra Norte"></label>
+    <label>Código<input id="site-code" placeholder="Ex.: OB-004"></label>
+    <label>Status<select id="site-status"><option value="Ativa">Ativa</option><option value="Inativa">Inativa</option></select></label>
+    <label>Equipe responsável<input id="site-team" placeholder="Ex.: Equipe A"></label>
+    <div class="full"><button class="btn" onclick="saveSite()">Salvar</button> <button class="btn secondary" onclick="sitesPage()">Cancelar</button></div>
+  </div>`;
+}
+
+async function saveSite() {
+  const name = document.getElementById('site-name').value.trim();
+  const code = document.getElementById('site-code').value.trim();
+  const status = document.getElementById('site-status').value;
+  const responsible_team = document.getElementById('site-team').value.trim();
+  if (!name || !code) { alert('Preencha nome e código.'); return; }
+
+  const { error } = await supabaseClient.from('sites').insert({ name, code, status, responsible_team });
+  if (error) { alert('Erro ao salvar obra: ' + friendlyError(error)); return; }
+  sitesPage();
+}
+
+async function editSite(id) {
+  loading();
+  const { data: s, error } = await supabaseClient.from('sites').select('*').eq('id', id).single();
+  if (error) { alert('Erro ao carregar obra: ' + friendlyError(error)); sitesPage(); return; }
+  title.textContent = 'Editar obra';
+  content.innerHTML = `<div class="form">
+    <label>Nome<input id="site-name" value="${s.name}"></label>
+    <label>Código<input id="site-code" value="${s.code}"></label>
+    <label>Status<select id="site-status">
+      <option value="Ativa" ${s.status === 'Ativa' ? 'selected' : ''}>Ativa</option>
+      <option value="Inativa" ${s.status === 'Inativa' ? 'selected' : ''}>Inativa</option>
+    </select></label>
+    <label>Equipe responsável<input id="site-team" value="${s.responsible_team || ''}"></label>
+    <div class="full"><button class="btn" onclick="updateSite('${id}')">Salvar alterações</button> <button class="btn secondary" onclick="sitesPage()">Cancelar</button></div>
+  </div>`;
+}
+
+async function updateSite(id) {
+  const name = document.getElementById('site-name').value.trim();
+  const code = document.getElementById('site-code').value.trim();
+  const status = document.getElementById('site-status').value;
+  const responsible_team = document.getElementById('site-team').value.trim();
+  if (!name || !code) { alert('Preencha nome e código.'); return; }
+
+  const { error } = await supabaseClient.from('sites').update({ name, code, status, responsible_team }).eq('id', id);
+  if (error) { alert('Erro ao atualizar obra: ' + friendlyError(error)); return; }
+  sitesPage();
+}
+
+async function workersPage() {
+  title.textContent = 'Trabalhadores';
+  loading();
+  const workers = await fetchWorkers();
+  content.innerHTML = `<div class="actions"><button class="btn" onclick="newWorker()">+ Novo registro</button></div>${workersTable(workers)}`;
+}
+
+function workersTable(workers) {
+  if (!workers.length) return `<div class="empty">Nenhum registro encontrado.</div>`;
+  return `<table class="table"><thead><tr><th>Nome</th><th>Função</th><th>Obra</th><th>Status</th><th></th></tr></thead><tbody>
+    ${workers.map(w => `<tr><td>${w.full_name}</td><td>${w.role}</td><td>${w.sites?.name || '-'}</td><td><span class="badge ${w.status === 'Ativo' ? 'green' : ''}">${w.status}</span></td>
+      <td><button class="btn secondary" onclick="editWorker('${w.id}')">Editar</button></td></tr>`).join('')}
+  </tbody></table>`;
+}
+
+async function newWorker() {
+  title.textContent = 'Novo trabalhador';
+  loading();
+  const sites = await fetchSites();
+  content.innerHTML = `<div class="form">
+    <label>Nome<input id="worker-name" placeholder="Nome completo"></label>
+    <label>Função<input id="worker-role" placeholder="Ex.: Pedreiro"></label>
+    <label>Obra<select id="worker-site">${sites.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}</select></label>
+    <label>Status<select id="worker-status"><option value="Ativo">Ativo</option><option value="Inativo">Inativo</option></select></label>
+    <div class="full"><button class="btn" onclick="saveWorker()">Salvar</button> <button class="btn secondary" onclick="workersPage()">Cancelar</button></div>
+  </div>`;
+}
+
+async function saveWorker() {
+  const full_name = document.getElementById('worker-name').value.trim();
+  const role = document.getElementById('worker-role').value.trim();
+  const site_id = document.getElementById('worker-site').value;
+  const status = document.getElementById('worker-status').value;
+  if (!full_name || !role) { alert('Preencha nome e função.'); return; }
+
+  const { error } = await supabaseClient.from('workers').insert({ full_name, role, site_id, status });
+  if (error) { alert('Erro ao salvar trabalhador: ' + friendlyError(error)); return; }
+  workersPage();
+}
+
+async function editWorker(id) {
+  loading();
+  const [{ data: w, error }, sites] = await Promise.all([
+    supabaseClient.from('workers').select('*').eq('id', id).single(),
+    fetchSites(),
+  ]);
+  if (error) { alert('Erro ao carregar trabalhador: ' + friendlyError(error)); workersPage(); return; }
+  title.textContent = 'Editar trabalhador';
+  content.innerHTML = `<div class="form">
+    <label>Nome<input id="worker-name" value="${w.full_name}"></label>
+    <label>Função<input id="worker-role" value="${w.role}"></label>
+    <label>Obra<select id="worker-site">${sites.map(s => `<option value="${s.id}" ${s.id === w.site_id ? 'selected' : ''}>${s.name}</option>`).join('')}</select></label>
+    <label>Status<select id="worker-status">
+      <option value="Ativo" ${w.status === 'Ativo' ? 'selected' : ''}>Ativo</option>
+      <option value="Inativo" ${w.status === 'Inativo' ? 'selected' : ''}>Inativo</option>
+    </select></label>
+    <div class="full"><button class="btn" onclick="updateWorker('${id}')">Salvar alterações</button> <button class="btn secondary" onclick="workersPage()">Cancelar</button></div>
+  </div>`;
+}
+
+async function updateWorker(id) {
+  const full_name = document.getElementById('worker-name').value.trim();
+  const role = document.getElementById('worker-role').value.trim();
+  const site_id = document.getElementById('worker-site').value;
+  const status = document.getElementById('worker-status').value;
+  if (!full_name || !role) { alert('Preencha nome e função.'); return; }
+
+  const { error } = await supabaseClient.from('workers').update({ full_name, role, site_id, status }).eq('id', id);
+  if (error) { alert('Erro ao atualizar trabalhador: ' + friendlyError(error)); return; }
+  workersPage();
+}
+
+async function ncsPage() {
+  title.textContent = 'Não conformidades';
+  loading();
+  const ncs = await fetchNCs();
+  content.innerHTML = ncsTable(ncs);
+}
+
+const NC_STATUSES = ['OPEN', 'IN_PROGRESS', 'WAITING_VALIDATION', 'RESOLVED'];
+
+function ncsTable(ncs) {
+  if (!ncs.length) return `<div class="empty">Nenhum registro encontrado.</div>`;
+  return `<table class="table"><thead><tr><th>Código</th><th>Obra</th><th>Descrição</th><th>Prioridade</th><th>Status</th></tr></thead><tbody>
+    ${ncs.map(n => `<tr><td>${n.code}</td><td>${n.sites?.name || '-'}</td><td>${n.description}</td>
+      <td><span class="badge ${n.priority === 'CRITICAL' ? 'red' : n.priority === 'HIGH' ? 'amber' : ''}">${n.priority}</span></td>
+      <td><select onchange="updateNCStatus('${n.id}', this.value)">
+        ${NC_STATUSES.map(s => `<option value="${s}" ${s === n.status ? 'selected' : ''}>${s}</option>`).join('')}
+      </select></td></tr>`).join('')}
+  </tbody></table>`;
+}
+
+async function updateNCStatus(id, status) {
+  const payload = { status, resolved_at: status === 'RESOLVED' ? new Date().toISOString() : null };
+  const { error } = await supabaseClient.from('non_conformities').update(payload).eq('id', id);
+  if (error) { alert('Erro ao atualizar NC: ' + friendlyError(error)); ncsPage(); return; }
+  ncsPage();
+}
+
+async function inspectionsPage() {
+  title.textContent = 'Inspeções';
+  loading();
+  const inspections = await fetchInspections();
+  const rows = inspections.map(i => [i.code, i.sites?.name || '-', i.checklist_type, i.inspection_date, i.status]);
+  content.innerHTML = `<div class="actions"><button class="btn" onclick="newInspection()">+ Nova inspeção</button></div>${table(rows, ['Código', 'Obra', 'Tipo', 'Data', 'Status'])}`;
+}
+
+async function newInspection() {
+  title.textContent = 'Nova inspeção';
+  loading();
+  const sites = await fetchSites();
+  content.innerHTML = `<div class="form">
+    <label>Obra<select id="insp-site">${sites.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}</select></label>
+    <label>Checklist<select id="insp-checklist"><option>NR-18 — Canteiro</option></select></label>
+    <label class="full">Local<input id="insp-location" placeholder="Ex.: Setor de alvenaria"></label>
+    <label class="full">Observação<textarea id="insp-notes" placeholder="Descrição da inspeção"></textarea></label>
+    <div class="full"><button class="btn" onclick="startChecklist()">Iniciar checklist</button></div>
+  </div>`;
+}
+
+async function startChecklist() {
+  const site_id = document.getElementById('insp-site').value;
+  const checklist_type = document.getElementById('insp-checklist').value;
+  const location = document.getElementById('insp-location').value;
+  const notes = document.getElementById('insp-notes').value;
+  if (!site_id) return;
+
+  const { data, error } = await supabaseClient.from('inspections').insert({
+    site_id, checklist_type, location, notes, inspector_id: currentUser.id
+  }).select('id, code').single();
+  if (error) { alert('Erro ao criar inspeção: ' + error.message); return; }
+
+  activeInspection = { id: data.id, code: data.code, items: CHECKLIST_ITEMS_NR18 };
+  title.textContent = `Checklist — ${checklist_type}`;
+  content.innerHTML = `<div class="card"><div class="label">INSPEÇÃO ${data.code} · EM ANDAMENTO</div>${activeInspection.items.map((x, i) => `<div style="padding:18px 0;border-bottom:1px solid #edf0f2"><b>${i + 1}. ${x}</b><div style="margin-top:10px">
+    <label><input type="radio" name="i${i}" value="conforme" checked> Conforme</label> &nbsp;
+    <label><input type="radio" name="i${i}" value="nao_conforme"> <span class="danger">Não conforme</span></label> &nbsp;
+    <label><input type="radio" name="i${i}" value="na"> N/A</label>
+  </div></div>`).join('')}<br><button class="btn" onclick="finishInspection()">Finalizar inspeção</button></div>`;
+}
+
+async function finishInspection() {
+  const items = activeInspection.items.map((description, i) => {
+    const checked = document.querySelector(`input[name="i${i}"]:checked`);
+    return { inspection_id: activeInspection.id, description, result: checked ? checked.value : 'na' };
+  });
+
+  const { error: itemsError } = await supabaseClient.from('inspection_items').insert(items);
+  if (itemsError) { alert('Erro ao salvar itens: ' + itemsError.message); return; }
+
+  await supabaseClient.from('inspections').update({ status: 'COMPLETED' }).eq('id', activeInspection.id);
+
+  const { data: ncsGenerated } = await supabaseClient.from('non_conformities').select('code').eq('inspection_id', activeInspection.id);
+  const count = ncsGenerated ? ncsGenerated.length : 0;
+
+  title.textContent = 'Inspeção concluída';
+  content.innerHTML = `<div class="card"><h2>Inspeção ${activeInspection.code} registrada</h2>
+    <p>${count > 0 ? `${count} não conformidade(s) foram geradas automaticamente a partir dos itens marcados como "Não conforme".` : 'Nenhuma não conformidade foi identificada nesta inspeção.'}</p>
+    <button class="btn" onclick="dashboard()">Voltar ao dashboard</button></div>`;
+  activeInspection = null;
+}
+
+// ================== Navegação ==================
+window.newInspection = newInspection;
+window.startChecklist = startChecklist;
+window.finishInspection = finishInspection;
+window.dashboard = dashboard;
+window.sitesPage = sitesPage;
+window.workersPage = workersPage;
+window.newSite = newSite;
+window.saveSite = saveSite;
+window.editSite = editSite;
+window.updateSite = updateSite;
+window.newWorker = newWorker;
+window.saveWorker = saveWorker;
+window.editWorker = editWorker;
+window.updateWorker = updateWorker;
+window.updateNCStatus = updateNCStatus;
+
+document.querySelectorAll('.nav').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.nav').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  const pages = { dashboard, inspections: inspectionsPage, ncs: ncsPage, sites: sitesPage, workers: workersPage };
+  pages[b.dataset.page]();
+});
+
+boot();
