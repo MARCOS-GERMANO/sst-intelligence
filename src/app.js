@@ -11,7 +11,11 @@ const content = document.getElementById('content');
 const title = document.getElementById('title');
 
 let currentUser = null;
-const CHECKLIST_ITEMS_NR18 = ['Guarda-corpo e proteção contra quedas', 'Organização do canteiro', 'Instalações elétricas', 'Uso adequado de EPI'];
+const CHECKLISTS = {
+  'NR-18 — Canteiro': ['Guarda-corpo e proteção contra quedas', 'Organização do canteiro', 'Instalações elétricas', 'Uso adequado de EPI'],
+  'NR-35 — Trabalho em altura': ['Uso de cinto de segurança tipo paraquedista', 'Ponto de ancoragem adequado', 'Treinamento e capacitação da equipe', 'Sinalização da área de risco'],
+  'NR-33 — Espaços confinados': ['Permissão de Entrada e Trabalho (PET) preenchida', 'Monitoramento de gases realizado', 'Ventilação do espaço', 'Vigia posicionado na entrada'],
+};
 let activeInspection = null; // {id, code, items:[description,...]}
 
 // ================== Autenticação ==================
@@ -268,9 +272,10 @@ const NC_STATUSES = ['OPEN', 'IN_PROGRESS', 'WAITING_VALIDATION', 'RESOLVED'];
 
 function ncsTable(ncs) {
   if (!ncs.length) return `<div class="empty">Nenhum registro encontrado.</div>`;
-  return `<table class="table"><thead><tr><th>Código</th><th>Obra</th><th>Descrição</th><th>Prioridade</th><th>Status</th></tr></thead><tbody>
+  return `<table class="table"><thead><tr><th>Código</th><th>Obra</th><th>Descrição</th><th>Prioridade</th><th>Foto</th><th>Status</th></tr></thead><tbody>
     ${ncs.map(n => `<tr><td>${n.code}</td><td>${n.sites?.name || '-'}</td><td>${n.description}</td>
       <td><span class="badge ${n.priority === 'CRITICAL' ? 'red' : n.priority === 'HIGH' ? 'amber' : ''}">${n.priority}</span></td>
+      <td>${n.photo_url ? `<a href="${n.photo_url}" target="_blank"><img src="${n.photo_url}" style="width:40px;height:40px;object-fit:cover;border-radius:6px"></a>` : '-'}</td>
       <td><select onchange="updateNCStatus('${n.id}', this.value)">
         ${NC_STATUSES.map(s => `<option value="${s}" ${s === n.status ? 'selected' : ''}>${s}</option>`).join('')}
       </select></td></tr>`).join('')}
@@ -298,7 +303,7 @@ async function newInspection() {
   const sites = await fetchSites();
   content.innerHTML = `<div class="form">
     <label>Obra<select id="insp-site">${sites.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}</select></label>
-    <label>Checklist<select id="insp-checklist"><option>NR-18 — Canteiro</option></select></label>
+    <label>Checklist<select id="insp-checklist">${Object.keys(CHECKLISTS).map(name => `<option value="${name}">${name}</option>`).join('')}</select></label>
     <label class="full">Local<input id="insp-location" placeholder="Ex.: Setor de alvenaria"></label>
     <label class="full">Observação<textarea id="insp-notes" placeholder="Descrição da inspeção"></textarea></label>
     <div class="full"><button class="btn" onclick="startChecklist()">Iniciar checklist</button></div>
@@ -317,20 +322,35 @@ async function startChecklist() {
   }).select('id, code').single();
   if (error) { alert('Erro ao criar inspeção: ' + error.message); return; }
 
-  activeInspection = { id: data.id, code: data.code, items: CHECKLIST_ITEMS_NR18 };
+  activeInspection = { id: data.id, code: data.code, items: CHECKLISTS[checklist_type] || [] };
   title.textContent = `Checklist — ${checklist_type}`;
   content.innerHTML = `<div class="card"><div class="label">INSPEÇÃO ${data.code} · EM ANDAMENTO</div>${activeInspection.items.map((x, i) => `<div style="padding:18px 0;border-bottom:1px solid #edf0f2"><b>${i + 1}. ${x}</b><div style="margin-top:10px">
     <label><input type="radio" name="i${i}" value="conforme" checked> Conforme</label> &nbsp;
     <label><input type="radio" name="i${i}" value="nao_conforme"> <span class="danger">Não conforme</span></label> &nbsp;
     <label><input type="radio" name="i${i}" value="na"> N/A</label>
+    <div style="margin-top:8px"><input type="file" id="photo${i}" accept="image/*"></div>
   </div></div>`).join('')}<br><button class="btn" onclick="finishInspection()">Finalizar inspeção</button></div>`;
 }
 
+async function uploadPhoto(file, inspectionId, index) {
+  if (!file) return null;
+  const path = `${inspectionId}/${index}-${Date.now()}-${file.name}`;
+  const { error } = await supabaseClient.storage.from('inspection-photos').upload(path, file);
+  if (error) { console.error('Erro ao enviar foto:', error.message); return null; }
+  const { data } = supabaseClient.storage.from('inspection-photos').getPublicUrl(path);
+  return data?.publicUrl || null;
+}
+
 async function finishInspection() {
-  const items = activeInspection.items.map((description, i) => {
+  const items = [];
+  for (let i = 0; i < activeInspection.items.length; i++) {
+    const description = activeInspection.items[i];
     const checked = document.querySelector(`input[name="i${i}"]:checked`);
-    return { inspection_id: activeInspection.id, description, result: checked ? checked.value : 'na' };
-  });
+    const fileInput = document.getElementById(`photo${i}`);
+    const file = fileInput && fileInput.files[0];
+    const photo_url = await uploadPhoto(file, activeInspection.id, i);
+    items.push({ inspection_id: activeInspection.id, description, result: checked ? checked.value : 'na', photo_url });
+  }
 
   const { error: itemsError } = await supabaseClient.from('inspection_items').insert(items);
   if (itemsError) { alert('Erro ao salvar itens: ' + itemsError.message); return; }
@@ -339,10 +359,12 @@ async function finishInspection() {
 
   const { data: ncsGenerated } = await supabaseClient.from('non_conformities').select('code').eq('inspection_id', activeInspection.id);
   const count = ncsGenerated ? ncsGenerated.length : 0;
+  const photos = items.filter(i => i.photo_url);
 
   title.textContent = 'Inspeção concluída';
   content.innerHTML = `<div class="card"><h2>Inspeção ${activeInspection.code} registrada</h2>
     <p>${count > 0 ? `${count} não conformidade(s) foram geradas automaticamente a partir dos itens marcados como "Não conforme".` : 'Nenhuma não conformidade foi identificada nesta inspeção.'}</p>
+    ${photos.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">${photos.map(p => `<img src="${p.photo_url}" style="width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #e2e7eb">`).join('')}</div>` : ''}
     <button class="btn" onclick="dashboard()">Voltar ao dashboard</button></div>`;
   activeInspection = null;
 }
