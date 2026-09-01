@@ -12,9 +12,16 @@ const title = document.getElementById('title');
 
 let currentUser = null;
 const CHECKLISTS = {
+  'NR-06 — EPI': ['Capacete de segurança em uso', 'Óculos de proteção adequados à atividade', 'Luvas apropriadas para o trabalho', 'Calçado de segurança (botina) em bom estado'],
+  'NR-10 — Instalações elétricas': ['Quadros elétricos sinalizados e trancados', 'Fiação sem emendas expostas', 'Aterramento das instalações', 'Uso de EPI isolante por eletricistas'],
+  'NR-11 — Transporte e movimentação de materiais': ['Empilhamento seguro e estável', 'Sinalização das rotas de circulação', 'Capacidade de carga respeitada nos equipamentos', 'Operadores de máquinas habilitados'],
+  'NR-12 — Máquinas e equipamentos': ['Proteções fixas e móveis instaladas', 'Dispositivo de parada de emergência funcional', 'Manual de instruções disponível', 'Manutenção preventiva em dia'],
+  'NR-17 — Ergonomia': ['Mobiliário e postos de trabalho adequados', 'Pausas para descanso respeitadas', 'Levantamento de peso dentro dos limites', 'Iluminação adequada ao posto de trabalho'],
   'NR-18 — Canteiro': ['Guarda-corpo e proteção contra quedas', 'Organização do canteiro', 'Instalações elétricas', 'Uso adequado de EPI'],
-  'NR-35 — Trabalho em altura': ['Uso de cinto de segurança tipo paraquedista', 'Ponto de ancoragem adequado', 'Treinamento e capacitação da equipe', 'Sinalização da área de risco'],
+  'NR-23 — Proteção contra incêndios': ['Extintores dentro da validade e desobstruídos', 'Saídas de emergência sinalizadas e livres', 'Brigada de incêndio treinada', 'Rota de fuga sem obstáculos'],
+  'NR-26 — Sinalização de segurança': ['Sinalização de áreas de risco visível', 'Cores de segurança aplicadas corretamente', 'Placas de EPI obrigatório nos acessos', 'Sinalização de piso molhado/escorregadio'],
   'NR-33 — Espaços confinados': ['Permissão de Entrada e Trabalho (PET) preenchida', 'Monitoramento de gases realizado', 'Ventilação do espaço', 'Vigia posicionado na entrada'],
+  'NR-35 — Trabalho em altura': ['Uso de cinto de segurança tipo paraquedista', 'Ponto de ancoragem adequado', 'Treinamento e capacitação da equipe', 'Sinalização da área de risco'],
 };
 let activeInspection = null; // {id, code, items:[description,...]}
 
@@ -94,6 +101,17 @@ function friendlyError(error) {
   return error.message;
 }
 
+function exportCSV(headers, rows, filename) {
+  const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportPDF() { window.print(); }
+
 // ================== Páginas ==================
 async function dashboard() {
   title.textContent = 'Dashboard';
@@ -102,9 +120,11 @@ async function dashboard() {
   const activeSites = sites.filter(s => s.status === 'Ativa').length;
   const activeWorkers = workers.filter(w => w.status === 'Ativo').length;
   const thisMonth = new Date().toISOString().slice(0, 7);
+  const today = new Date().toISOString().slice(0, 10);
   const inspectionsThisMonth = inspections.filter(i => (i.inspection_date || '').startsWith(thisMonth)).length;
   const openNCs = ncs.filter(n => n.status !== 'RESOLVED');
   const critical = openNCs.filter(n => n.priority === 'CRITICAL').length;
+  const overdue = openNCs.filter(n => n.due_date && n.due_date < today).length;
   const rows = openNCs.slice(0, 5).map(n => [n.code, n.sites?.name || '-', n.description, n.priority, n.status]);
 
   content.innerHTML = `<div class="grid">
@@ -115,11 +135,46 @@ async function dashboard() {
   </div>
   <div class="section"><h2>Indicadores de controle</h2><div class="grid">
     <div class="card"><div class="label">CRÍTICAS</div><div class="metric danger">${critical}</div></div>
-    <div class="card"><div class="label">TOTAL DE NCs</div><div class="metric">${ncs.length}</div></div>
+    <div class="card"><div class="label">ATRASADAS</div><div class="metric danger">${overdue}</div></div>
     <div class="card"><div class="label">RESOLVIDAS</div><div class="metric success">${ncs.length - openNCs.length}</div></div>
     <div class="card"><div class="label">OBRAS</div><div class="metric">${sites.length}</div></div>
   </div></div>
+  <div class="section"><h2>NCs por mês</h2><div class="card"><canvas id="ncs-chart" height="90"></canvas></div></div>
   <div class="section"><h2>Últimas não conformidades</h2>${table(rows, ['Código', 'Obra', 'Descrição', 'Prioridade', 'Status'])}</div>`;
+
+  renderNCsChart(ncs);
+}
+
+let ncsChartInstance = null;
+function renderNCsChart(ncs) {
+  const canvas = document.getElementById('ncs-chart');
+  if (!canvas || typeof Chart === 'undefined') return;
+
+  const months = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push(d.toISOString().slice(0, 7));
+  }
+  const monthLabel = (m) => {
+    const [y, mo] = m.split('-');
+    return `${['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'][parseInt(mo, 10) - 1]}/${y.slice(2)}`;
+  };
+  const createdByMonth = months.map(m => ncs.filter(n => (n.created_at || '').startsWith(m)).length);
+  const resolvedByMonth = months.map(m => ncs.filter(n => n.status === 'RESOLVED' && (n.resolved_at || '').startsWith(m)).length);
+
+  if (ncsChartInstance) ncsChartInstance.destroy();
+  ncsChartInstance = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: months.map(monthLabel),
+      datasets: [
+        { label: 'Abertas', data: createdByMonth, backgroundColor: '#b42318' },
+        { label: 'Resolvidas', data: resolvedByMonth, backgroundColor: '#137333' },
+      ],
+    },
+    options: { responsive: true, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } },
+  });
 }
 
 async function sitesPage() {
@@ -265,21 +320,38 @@ async function ncsPage() {
   title.textContent = 'Não conformidades';
   loading();
   const ncs = await fetchNCs();
-  content.innerHTML = ncsTable(ncs);
+  window._ncsData = ncs;
+  content.innerHTML = `<div class="actions"><button class="btn secondary" onclick="exportNCsCSV()">Exportar CSV</button><button class="btn secondary" onclick="exportPDF()">Exportar PDF</button></div>${ncsTable(ncs)}`;
+}
+
+function exportNCsCSV() {
+  const rows = (window._ncsData || []).map(n => [n.code, n.sites?.name || '-', n.description, n.priority, n.status, n.due_date || '']);
+  exportCSV(['Código', 'Obra', 'Descrição', 'Prioridade', 'Status', 'Prazo'], rows, 'nao-conformidades.csv');
 }
 
 const NC_STATUSES = ['OPEN', 'IN_PROGRESS', 'WAITING_VALIDATION', 'RESOLVED'];
 
 function ncsTable(ncs) {
   if (!ncs.length) return `<div class="empty">Nenhum registro encontrado.</div>`;
-  return `<table class="table"><thead><tr><th>Código</th><th>Obra</th><th>Descrição</th><th>Prioridade</th><th>Foto</th><th>Status</th></tr></thead><tbody>
-    ${ncs.map(n => `<tr><td>${n.code}</td><td>${n.sites?.name || '-'}</td><td>${n.description}</td>
+  const today = new Date().toISOString().slice(0, 10);
+  return `<table class="table"><thead><tr><th>Código</th><th>Obra</th><th>Descrição</th><th>Prioridade</th><th>Foto</th><th>Prazo</th><th>Status</th></tr></thead><tbody>
+    ${ncs.map(n => {
+      const overdue = n.due_date && n.due_date < today && n.status !== 'RESOLVED';
+      return `<tr><td>${n.code}</td><td>${n.sites?.name || '-'}</td><td>${n.description}</td>
       <td><span class="badge ${n.priority === 'CRITICAL' ? 'red' : n.priority === 'HIGH' ? 'amber' : ''}">${n.priority}</span></td>
       <td>${n.photo_url ? `<a href="${n.photo_url}" target="_blank"><img src="${n.photo_url}" style="width:40px;height:40px;object-fit:cover;border-radius:6px"></a>` : '-'}</td>
+      <td><input type="date" value="${n.due_date || ''}" onchange="updateNCDueDate('${n.id}', this.value)">${overdue ? ' <span class="badge red">ATRASADA</span>' : ''}</td>
       <td><select onchange="updateNCStatus('${n.id}', this.value)">
         ${NC_STATUSES.map(s => `<option value="${s}" ${s === n.status ? 'selected' : ''}>${s}</option>`).join('')}
-      </select></td></tr>`).join('')}
+      </select></td></tr>`;
+    }).join('')}
   </tbody></table>`;
+}
+
+async function updateNCDueDate(id, due_date) {
+  const { error } = await supabaseClient.from('non_conformities').update({ due_date: due_date || null }).eq('id', id);
+  if (error) { alert('Erro ao atualizar prazo: ' + friendlyError(error)); }
+  ncsPage();
 }
 
 async function updateNCStatus(id, status) {
@@ -293,8 +365,14 @@ async function inspectionsPage() {
   title.textContent = 'Inspeções';
   loading();
   const inspections = await fetchInspections();
+  window._inspectionsData = inspections;
   const rows = inspections.map(i => [i.code, i.sites?.name || '-', i.checklist_type, i.inspection_date, i.status]);
-  content.innerHTML = `<div class="actions"><button class="btn" onclick="newInspection()">+ Nova inspeção</button></div>${table(rows, ['Código', 'Obra', 'Tipo', 'Data', 'Status'])}`;
+  content.innerHTML = `<div class="actions"><button class="btn" onclick="newInspection()">+ Nova inspeção</button><button class="btn secondary" onclick="exportInspectionsCSV()">Exportar CSV</button><button class="btn secondary" onclick="exportPDF()">Exportar PDF</button></div>${table(rows, ['Código', 'Obra', 'Tipo', 'Data', 'Status'])}`;
+}
+
+function exportInspectionsCSV() {
+  const rows = (window._inspectionsData || []).map(i => [i.code, i.sites?.name || '-', i.checklist_type, i.inspection_date, i.status]);
+  exportCSV(['Código', 'Obra', 'Tipo', 'Data', 'Status'], rows, 'inspecoes.csv');
 }
 
 async function newInspection() {
@@ -385,6 +463,10 @@ window.saveWorker = saveWorker;
 window.editWorker = editWorker;
 window.updateWorker = updateWorker;
 window.updateNCStatus = updateNCStatus;
+window.updateNCDueDate = updateNCDueDate;
+window.exportNCsCSV = exportNCsCSV;
+window.exportInspectionsCSV = exportInspectionsCSV;
+window.exportPDF = exportPDF;
 
 document.querySelectorAll('.nav').forEach(b => b.onclick = () => {
   document.querySelectorAll('.nav').forEach(x => x.classList.remove('active'));
