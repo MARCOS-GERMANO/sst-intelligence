@@ -1,4 +1,12 @@
-<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SST Intelligence</title><link rel="stylesheet" href="style.css"></head><body>
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>SST Intelligence</title><link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#101820">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SST Intel">
+</head><body>
 <div id="login-screen" class="login-screen">
   <form id="login-form" class="login-card">
     <img src="logo.png" class="logo" alt="SST Intelligence">
@@ -17,4 +25,11 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="config.js"></script>
 <script src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+</script>
 </body></html>
