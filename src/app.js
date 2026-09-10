@@ -42,10 +42,25 @@ function showLogin() {
 
 async function showApp(user) {
   currentUser = user;
+  const expired = await isAccessExpired();
+  if (expired) {
+    await supabaseClient.auth.signOut();
+    currentUser = null;
+    loginScreen.style.display = 'flex';
+    appShell.style.display = 'none';
+    loginError.textContent = 'Seu acesso de teste expirou. Fale com o administrador para liberar de novo.';
+    return;
+  }
   loginScreen.style.display = 'none';
   appShell.style.display = 'flex';
   await loadUserInfo();
   dashboard();
+}
+
+async function isAccessExpired() {
+  const { data } = await supabaseClient.from('profiles').select('access_expires_at').eq('id', currentUser.id).single();
+  if (!data || !data.access_expires_at) return false;
+  return new Date(data.access_expires_at).getTime() < Date.now();
 }
 
 async function loadUserInfo() {
