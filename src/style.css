@@ -9,3 +9,4 @@
 .user span{color:#66737d}
 .user button{border:0;background:transparent;color:#687680;font-size:11px;text-decoration:underline;cursor:pointer;padding:0}
 @media(max-width:850px){aside{width:70px}.brand div:not(.logo),.nav{font-size:0}.nav:before{font-size:18px}.side-foot{display:none}main{padding:22px}.grid{grid-template-columns:repeat(2,1fr)}}
+@media print{aside,.actions,.user{display:none!important}body{background:#fff}main{padding:0}}
