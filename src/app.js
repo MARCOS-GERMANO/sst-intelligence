@@ -26,6 +26,62 @@ const CHECKLISTS = {
 let activeInspection = null; // {id, code, items:[description,...]}
 let finishingInspection = false;
 
+// No banco multiempresa real, seleção e associação dependerão de membership/RLS.
+// Até a migração validada, administrar empresas/exclusões fica restrito à prévia isolada.
+function setupDemoCompanies() {
+  const demo = window.SST_PREVIEW_DEMO === true && window.SST_PREVIEW;
+  const wrap = document.getElementById('company-switcher-wrap');
+  const select = document.getElementById('company-switcher');
+  document.querySelectorAll('.demo-only-nav').forEach(b => { b.style.display = demo ? '' : 'none'; });
+  if (!demo || !wrap || !select) return;
+  wrap.style.display = 'grid';
+  const companies = window.SST_PREVIEW.companies();
+  const active = window.SST_PREVIEW.activeCompany();
+  select.innerHTML = companies.map(c => `<option value="${escapeHtml(c.id)}" ${c.id===active?.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
+  select.onchange = () => {
+    window.SST_PREVIEW.selectCompany(select.value);
+
+    const page = document.getElementById('title').textContent;
+    if (page === 'Obras') sitesPage();
+    else if (page === 'Trabalhadores') workersPage();
+    else if (page === 'Não conformidades') ncsPage();
+    else if (page === 'Inspeções') inspectionsPage();
+    else dashboard();
+  };
+}
+function previewOnly() { return window.SST_PREVIEW_DEMO === true; }
+function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+async function deletePreviewRecord(table, id) {
+  if (!previewOnly()) { alert('A exclusão ficará disponível depois que o isolamento multiempresa for implantado e validado.'); return; }
+  const snapshot = window.SST_PREVIEW.snapshot();
+  const row = (snapshot.data[table] || []).find(x => x.id === id);
+  if (!row) { alert('Registro não encontrado nesta prévia.'); return; }
+  const labels = {companies:'empresa', sites:'obra', workers:'trabalhador', non_conformities:'não conformidade', inspections:'inspeção'};
+  const name = row.name || row.full_name || row.code || 'registro';
+  let warning = '';
+  if (table === 'companies') {
+    const counts=['sites','workers','inspections','non_conformities'].map(t=>(snapshot.data[t]||[]).filter(x=>x.company_id===id).length);
+    warning = `\nTambém serão removidos: ${counts[0]} obra(s), ${counts[1]} trabalhador(es), ${counts[2]} inspeção(ões) e ${counts[3]} não conformidade(s) desta empresa fictícia.`;
+  } else if (table === 'sites') {
+    const workers=snapshot.data.workers.filter(x=>x.site_id===id).length;
+    const inspections=snapshot.data.inspections.filter(x=>x.site_id===id).length;
+    const ncs=snapshot.data.non_conformities.filter(x=>x.site_id===id).length;
+    warning=`\nA obra e seus vínculos fictícios serão removidos: ${workers} trabalhador(es), ${inspections} inspeção(ões), ${ncs} não conformidade(s).`;
+  } else if (table === 'inspections') {
+    const ncs=snapshot.data.non_conformities.filter(x=>x.inspection_id===id).length;
+    warning=`\nTambém serão removidos itens e ${ncs} não conformidade(s) ligados à inspeção fictícia.`;
+  }
+  if (!window.confirm(`Excluir ${labels[table] || 'registro'} “${name}”?${warning}\n\nSomente dados fictícios da prévia serão alterados.`)) return;
+  const { data, error } = await window.SST_PREVIEW.deleteRecord(table, id);
+  if (error || !data?.length) { alert(`Não foi possível excluir: ${friendlyError(error) || 'registro não encontrado'}`); return; }
+  if (table === 'sites') sitesPage();
+  else if (table === 'workers') workersPage();
+  else if (table === 'non_conformities') ncsPage();
+  else if (table === 'inspections') inspectionsPage();
+  else if (table === 'companies') { setupDemoCompanies(); companiesPage(); }
+}
+
+
 // ================== Autenticação ==================
 async function boot() {
   const { data: { session } } = await supabaseClient.auth.getSession();
@@ -55,6 +111,7 @@ async function showApp(user) {
   loginScreen.style.display = 'none';
   appShell.style.display = 'flex';
   await loadUserInfo();
+  setupDemoCompanies();
   dashboard();
 }
 
@@ -196,6 +253,24 @@ function renderNCsChart(ncs) {
   });
 }
 
+async function companiesPage() {
+  if (!previewOnly()) { content.innerHTML='<div class="empty"><strong>Gestão de empresas ainda não está ativa.</strong><p>Será liberada após validar e implantar o isolamento multiempresa.</p></div>'; return; }
+  title.textContent='Empresas · demonstração';
+  const companies=window.SST_PREVIEW.companies();
+  content.innerHTML=`<section class="demo-notice"><span class="demo-pill">AMBIENTE FICTÍCIO</span><p>Empresas e registros abaixo existem somente nesta prévia isolada. Nada é salvo no Supabase.</p></section><div class="actions"><button class="btn" onclick="newCompany()">+ Nova empresa fictícia</button></div><div class="company-grid">${companies.map(c=>`<article class="company-card"><div class="company-card-top"><span class="company-glyph">▣</span><span class="badge green">${escapeHtml(c.status)}</span></div><h2>${escapeHtml(c.name)}</h2><p>${escapeHtml(c.city||'Local não informado')}</p><dl><div><dt>CNPJ fictício</dt><dd>${escapeHtml(c.cnpj||'—')}</dd></div><div><dt>Obras</dt><dd>${(dataCount('sites',c.id))}</dd></div><div><dt>Funcionários</dt><dd>${dataCount('workers',c.id)}</dd></div></dl><div class="company-actions"><button class="btn secondary" onclick="switchToCompany('${escapeHtml(c.id)}')">Abrir empresa</button><button class="btn delete-btn" onclick="deletePreviewRecord('companies','${escapeHtml(c.id)}')">Excluir</button></div></article>`).join('')}</div>`;
+}
+function dataCount(table,companyId) { const snap=window.SST_PREVIEW.snapshot();return (snap.data[table]||[]).filter(x=>x.company_id===companyId).length; }
+function switchToCompany(id) { window.SST_PREVIEW.selectCompany(id); setupDemoCompanies(); document.querySelector('.nav[data-page="dashboard"]')?.click(); }
+function newCompany(){
+ title.textContent='Nova empresa de demonstração';
+ content.innerHTML=`<div class="form"><div class="full"><span class="demo-pill">DADOS DE TESTE</span><p class="form-hint">Este cadastro será temporário e visível somente nesta prévia.</p></div><label>Nome da empresa<input id="company-name" placeholder="Ex.: Horizonte Obras"></label><label>CNPJ fictício<input id="company-cnpj" placeholder="00.000.000/0001-00"></label><label class="full">Cidade, UF<input id="company-city" placeholder="Fortaleza, CE"></label><div class="full"><button class="btn" onclick="saveCompany()">Criar empresa fictícia</button> <button class="btn secondary" onclick="companiesPage()">Cancelar</button></div></div>`;
+}
+function saveCompany(){
+ const name=document.getElementById('company-name').value.trim();const cnpj=document.getElementById('company-cnpj').value.trim();const city=document.getElementById('company-city').value.trim();
+ if(!name){alert('Informe o nome da empresa.');return;}
+ window.SST_PREVIEW.createCompany({name,cnpj:cnpj||'CNPJ fictício',city,status:'Ativa'}).then(({error})=>{if(error){alert('Não foi possível criar a empresa fictícia.');return;}setupDemoCompanies();companiesPage();});
+}
+
 async function sitesPage() {
   title.textContent = 'Obras';
   loading();
@@ -206,13 +281,14 @@ async function sitesPage() {
 
 function sitesTable(sites) {
   if (!sites.length) return `<div class="empty">Nenhum registro encontrado.</div>`;
-  return `<table class="table"><thead><tr><th>Obra</th><th>Código</th><th>Status</th><th>Responsável</th><th></th></tr></thead><tbody>
+  return `<table class="table"><thead><tr><th>Obra</th><th>Código</th><th>Status</th><th>Responsável</th><th>Ações</th></tr></thead><tbody>
     ${sites.map(s => `<tr><td>${s.name}</td><td>${s.code}</td><td><span class="badge ${s.status === 'Ativa' ? 'green' : ''}">${s.status}</span></td><td>${s.responsible_team || '-'}</td>
-      <td><button class="btn secondary" onclick="editSite('${s.id}')">Editar</button></td></tr>`).join('')}
+      <td class="row-actions"><button class="btn secondary" onclick="editSite('${s.id}')">Editar</button>${previewOnly()?`<button class="btn delete-btn" onclick="deletePreviewRecord('sites','${s.id}')">Excluir</button>`:''}</td></tr>`).join('')}
   </tbody></table>`;
 }
 
 function newSite() {
+  if (previewOnly() && !window.SST_PREVIEW.activeCompany()) { alert('Crie ou selecione uma empresa fictícia primeiro.'); companiesPage(); return; }
   title.textContent = 'Nova obra';
   content.innerHTML = `<div class="form">
     <label>Nome<input id="site-name" placeholder="Ex.: Obra Norte"></label>
@@ -274,13 +350,14 @@ async function workersPage() {
 
 function workersTable(workers) {
   if (!workers.length) return `<div class="empty">Nenhum registro encontrado.</div>`;
-  return `<table class="table"><thead><tr><th>Nome</th><th>Função</th><th>Obra</th><th>Status</th><th></th></tr></thead><tbody>
+  return `<table class="table"><thead><tr><th>Nome</th><th>Função</th><th>Obra</th><th>Status</th><th>Ações</th></tr></thead><tbody>
     ${workers.map(w => `<tr><td>${w.full_name}</td><td>${w.role}</td><td>${w.sites?.name || '-'}</td><td><span class="badge ${w.status === 'Ativo' ? 'green' : ''}">${w.status}</span></td>
-      <td><button class="btn secondary" onclick="editWorker('${w.id}')">Editar</button></td></tr>`).join('')}
+      <td class="row-actions"><button class="btn secondary" onclick="editWorker('${w.id}')">Editar</button>${previewOnly()?`<button class="btn delete-btn" onclick="deletePreviewRecord('workers','${w.id}')">Excluir</button>`:''}</td></tr>`).join('')}
   </tbody></table>`;
 }
 
 async function newWorker() {
+  if (previewOnly() && !window.SST_PREVIEW.activeCompany()) { alert('Crie ou selecione uma empresa fictícia primeiro.'); companiesPage(); return; }
   title.textContent = 'Novo trabalhador';
   loading();
   let sites;
@@ -357,7 +434,7 @@ const NC_STATUSES = ['OPEN', 'IN_PROGRESS', 'WAITING_VALIDATION', 'RESOLVED'];
 function ncsTable(ncs) {
   if (!ncs.length) return `<div class="empty">Nenhum registro encontrado.</div>`;
   const today = new Date().toISOString().slice(0, 10);
-  return `<table class="table"><thead><tr><th>Código</th><th>Obra</th><th>Descrição</th><th>Prioridade</th><th>Foto</th><th>Prazo</th><th>Status</th></tr></thead><tbody>
+  return `<table class="table"><thead><tr><th>Código</th><th>Obra</th><th>Descrição</th><th>Prioridade</th><th>Foto</th><th>Prazo</th><th>Status</th><th>Ações</th></tr></thead><tbody>
     ${ncs.map(n => {
       const overdue = n.due_date && n.due_date < today && n.status !== 'RESOLVED';
       return `<tr><td>${n.code}</td><td>${n.sites?.name || '-'}</td><td>${n.description}</td>
@@ -366,7 +443,7 @@ function ncsTable(ncs) {
       <td><input type="date" value="${n.due_date || ''}" onchange="updateNCDueDate('${n.id}', this.value)">${overdue ? ' <span class="badge red">ATRASADA</span>' : ''}</td>
       <td><select onchange="updateNCStatus('${n.id}', this.value)">
         ${NC_STATUSES.map(s => `<option value="${s}" ${s === n.status ? 'selected' : ''}>${s}</option>`).join('')}
-      </select></td></tr>`;
+      </select></td><td>${previewOnly()?`<button class="btn delete-btn" onclick="deletePreviewRecord('non_conformities','${n.id}')">Excluir</button>`:'—'}</td></tr>`;
     }).join('')}
   </tbody></table>`;
 }
@@ -391,7 +468,8 @@ async function inspectionsPage() {
   try { inspections = await fetchInspections(); } catch (error) { content.innerHTML = '<div class="empty" role="alert"><strong>Não foi possível carregar os dados.</strong><p>Confira a conexão e tente novamente.</p></div>'; return; }
   window._inspectionsData = inspections;
   const rows = inspections.map(i => [i.code, i.sites?.name || '-', i.checklist_type, i.inspection_date, i.status]);
-  content.innerHTML = `<div class="actions"><button class="btn" onclick="newInspection()">+ Nova inspeção</button><button class="btn secondary" onclick="exportInspectionsCSV()">Exportar CSV</button><button class="btn secondary" onclick="exportPDF()">Exportar PDF</button></div>${table(rows, ['Código', 'Obra', 'Tipo', 'Data', 'Status'])}`;
+  const demoTable = !inspections.length ? '<div class="empty">Nenhuma inspeção encontrada.</div>' : `<table class="table"><thead><tr><th>Código</th><th>Obra</th><th>Checklist</th><th>Data</th><th>Status</th><th>Ações</th></tr></thead><tbody>${inspections.map(i=>`<tr><td>${escapeHtml(i.code)}</td><td>${escapeHtml(i.sites?.name||'-')}</td><td>${escapeHtml(i.checklist_type)}</td><td>${escapeHtml(i.inspection_date||'-')}</td><td>${escapeHtml(i.status||'-')}</td><td><button class="btn delete-btn" onclick="deletePreviewRecord('inspections','${escapeHtml(i.id)}')">Excluir</button></td></tr>`).join('')}</tbody></table>`;
+  content.innerHTML = `<div class="actions"><button class="btn" onclick="newInspection()">+ Nova inspeção</button><button class="btn secondary" onclick="exportInspectionsCSV()">Exportar CSV</button><button class="btn secondary" onclick="exportPDF()">Exportar PDF</button></div>${previewOnly()?demoTable:table(rows, ['Código', 'Obra', 'Tipo', 'Data', 'Status'])}`;
 }
 
 function exportInspectionsCSV() {
@@ -400,6 +478,7 @@ function exportInspectionsCSV() {
 }
 
 async function newInspection() {
+  if (previewOnly() && !window.SST_PREVIEW.activeCompany()) { alert('Crie ou selecione uma empresa fictícia primeiro.'); companiesPage(); return; }
   title.textContent = 'Nova inspeção';
   loading();
   let sites;
@@ -565,6 +644,11 @@ window.newWorker = newWorker;
 window.saveWorker = saveWorker;
 window.editWorker = editWorker;
 window.updateWorker = updateWorker;
+window.deletePreviewRecord = deletePreviewRecord;
+window.companiesPage = companiesPage;
+window.newCompany = newCompany;
+window.saveCompany = saveCompany;
+window.switchToCompany = switchToCompany;
 window.updateNCStatus = updateNCStatus;
 window.updateNCDueDate = updateNCDueDate;
 window.exportNCsCSV = exportNCsCSV;
@@ -574,7 +658,7 @@ window.exportPDF = exportPDF;
 document.querySelectorAll('.nav').forEach(b => b.onclick = () => {
   document.querySelectorAll('.nav').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
-  const pages = { dashboard, inspections: inspectionsPage, ncs: ncsPage, sites: sitesPage, workers: workersPage };
+  const pages = { dashboard, inspections: inspectionsPage, ncs: ncsPage, sites: sitesPage, workers: workersPage, companies: companiesPage };
   pages[b.dataset.page]();
 });
 
