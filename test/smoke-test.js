@@ -87,6 +87,12 @@ async function clickPage(page) {
     await flush();
     await window.startChecklist();
     await flush();
+    const feedback = window.document.getElementById('inspection-feedback');
+    window.reviewInspection();
+    if (!feedback.textContent.includes('Falta responder')) errors.push('Permitiu revisar sem responder todos os itens');
+    for (const radio of window.document.querySelectorAll('input[value="conforme"]')) radio.checked = true;
+    window.updateInspectionProgress();
+    if (!window.document.getElementById('inspection-percent').textContent.includes('100%')) errors.push('Progresso não chegou a 100%');
     await window.finishInspection();
     await flush();
     inspectionConfirmationHtml = window.document.getElementById('content').innerHTML;
