@@ -430,6 +430,12 @@ function exportNCsCSV() {
 }
 
 const NC_STATUSES = ['OPEN', 'IN_PROGRESS', 'WAITING_VALIDATION', 'RESOLVED'];
+function statusClass(status) {
+  return ({OPEN:'open','IN_PROGRESS':'progress','WAITING_VALIDATION':'validation',RESOLVED:'resolved'})[status] || 'default';
+}
+function statusLabel(status) {
+  return ({OPEN:'Em aberto',IN_PROGRESS:'Em andamento',WAITING_VALIDATION:'Aguardando validação',RESOLVED:'Resolvida'})[status] || status;
+}
 
 function ncsTable(ncs) {
   if (!ncs.length) return `<div class="empty">Nenhum registro encontrado.</div>`;
@@ -440,9 +446,9 @@ function ncsTable(ncs) {
       return `<tr><td>${n.code}</td><td>${n.sites?.name || '-'}</td><td>${n.description}</td>
       <td><span class="badge ${n.priority === 'CRITICAL' ? 'red' : n.priority === 'HIGH' ? 'amber' : ''}">${n.priority}</span></td>
       <td>${n.photo_url ? `<a href="${n.photo_url}" target="_blank"><img src="${n.photo_url}" style="width:40px;height:40px;object-fit:cover;border-radius:6px"></a>` : '-'}</td>
-      <td><input type="date" value="${n.due_date || ''}" onchange="updateNCDueDate('${n.id}', this.value)">${overdue ? ' <span class="badge red">ATRASADA</span>' : ''}</td>
-      <td><select onchange="updateNCStatus('${n.id}', this.value)">
-        ${NC_STATUSES.map(s => `<option value="${s}" ${s === n.status ? 'selected' : ''}>${s}</option>`).join('')}
+      <td><div class="due-date-cell"><input class="table-date" aria-label="Prazo de ${escapeHtml(n.code)}" type="date" value="${n.due_date || ''}" onchange="updateNCDueDate('${n.id}', this.value)">${overdue ? '<span class="badge red">ATRASADA</span>' : ''}</div></td>
+      <td><select class="table-select status-select status-${statusClass(n.status)}" aria-label="Status de ${escapeHtml(n.code)}" onchange="this.className='table-select status-select status-'+statusClass(this.value);updateNCStatus('${n.id}', this.value)">
+        ${NC_STATUSES.map(s => `<option value="${s}" ${s === n.status ? 'selected' : ''}>${statusLabel(s)}</option>`).join('')}
       </select></td><td>${previewOnly()?`<button class="btn delete-btn" onclick="deletePreviewRecord('non_conformities','${n.id}')">Excluir</button>`:'—'}</td></tr>`;
     }).join('')}
   </tbody></table>`;
