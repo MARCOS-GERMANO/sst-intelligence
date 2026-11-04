@@ -24,6 +24,7 @@ const CHECKLISTS = {
   'NR-35 — Trabalho em altura': ['Uso de cinto de segurança tipo paraquedista', 'Ponto de ancoragem adequado', 'Treinamento e capacitação da equipe', 'Sinalização da área de risco'],
 };
 let activeInspection = null; // {id, code, items:[description,...]}
+let finishingInspection = false;
 
 // ================== Autenticação ==================
 async function boot() {
@@ -421,13 +422,14 @@ async function startChecklist() {
   if (error) { alert('Erro ao criar inspeção: ' + error.message); return; }
 
   activeInspection = { id: data.id, code: data.code, items: CHECKLISTS[checklist_type] || [] };
+  finishingInspection = false;
   title.textContent = `Checklist — ${checklist_type}`;
   content.innerHTML = `<div class="inspection-head"><span class="section-kicker">INSPEÇÃO ${data.code} · EM ANDAMENTO</span><h2>Vamos conferir a segurança?</h2><p>Escolha uma resposta para cada item. Você poderá revisar antes de concluir.</p><div class="progress-row"><span id="inspection-progress">0 de ${activeInspection.items.length} respondidos</span><span id="inspection-percent">0%</span></div><div class="progress-track"><div id="inspection-progress-bar"></div></div></div>
   <div class="inspection-list">${activeInspection.items.map((x, i) => `<fieldset class="inspection-item"><legend><span class="item-number">${i+1}</span> ${x}</legend><div class="answer-options">
     <label><input type="radio" name="i${i}" value="conforme" onchange="updateInspectionProgress()"><span>✓ Conforme</span></label>
     <label><input type="radio" name="i${i}" value="nao_conforme" onchange="updateInspectionProgress()"><span>! Não conforme</span></label>
     <label><input type="radio" name="i${i}" value="na" onchange="updateInspectionProgress()"><span>— Não se aplica</span></label></div>
-    <label class="photo-label">📷 Adicionar foto <input type="file" id="photo${i}" accept="image/*" capture="environment"></label></fieldset>`).join('')}</div><div class="inspection-footer"><p id="inspection-feedback" role="status">Responda todos os itens para revisar.</p><button class="btn" onclick="reviewInspection()">Revisar inspeção →</button></div>`;
+    <p class="photo-note">📷 Anexos de foto ainda não estão disponíveis nesta versão.</p></fieldset>`).join('')}</div><div class="inspection-footer"><p id="inspection-feedback" role="status">Responda todos os itens para revisar.</p><button class="btn" onclick="reviewInspection()">Revisar inspeção →</button></div>`;
 }
 
 function updateInspectionProgress() {
@@ -453,38 +455,93 @@ async function uploadPhoto(file, inspectionId, index) {
   if (!file) return null;
   const path = `${inspectionId}/${index}-${Date.now()}-${file.name}`;
   const { error } = await supabaseClient.storage.from('inspection-photos').upload(path, file);
-  if (error) { console.error('Erro ao enviar foto:', error.message); return null; }
+  if (error) throw new Error(`Não foi possível enviar a foto do item ${index + 1}: ${error.message}`);
   const { data } = supabaseClient.storage.from('inspection-photos').getPublicUrl(path);
-  return data?.publicUrl || null;
+  if (!data?.publicUrl) throw new Error(`Não foi possível obter o endereço da foto do item ${index + 1}.`);
+  return data.publicUrl;
 }
 
 async function finishInspection() {
-  if (!activeInspection || activeInspection.items.some((_, i) => !document.querySelector(`input[name="i${i}"]:checked`))) { alert('Responda todos os itens antes de finalizar.'); return; }
-  const items = [];
-  for (let i = 0; i < activeInspection.items.length; i++) {
-    const description = activeInspection.items[i];
-    const checked = document.querySelector(`input[name="i${i}"]:checked`);
-    const fileInput = document.getElementById(`photo${i}`);
-    const file = fileInput && fileInput.files[0];
-    const photo_url = await uploadPhoto(file, activeInspection.id, i);
-    items.push({ inspection_id: activeInspection.id, description, result: checked ? checked.value : 'na', photo_url });
+  if (!activeInspection || finishingInspection) return;
+  const selectedPhotos = [...content.querySelectorAll('input[type="file"]')].some(input => input.files?.length);
+  if (selectedPhotos) {
+    const feedback = document.getElementById('inspection-feedback');
+    if (feedback) feedback.textContent = 'O esquema atual não armazena o vínculo das fotos aos itens. Remova as fotos selecionadas antes de concluir; nenhuma alteração foi gravada.';
+    return;
+  }
+  const missing = activeInspection.items.findIndex((_, i) => !document.querySelector(`input[name="i${i}"]:checked`));
+  if (missing !== -1) {
+    const feedback = document.getElementById('inspection-feedback');
+    if (feedback) feedback.textContent = `Falta responder o item ${missing + 1}.`;
+    document.querySelector(`input[name="i${missing}"]`)?.focus();
+    return;
   }
 
-  const { error: itemsError } = await supabaseClient.from('inspection_items').insert(items);
-  if (itemsError) { alert('Erro ao salvar itens: ' + itemsError.message); return; }
+  finishingInspection = true;
+  const buttons = [...content.querySelectorAll('button')];
+  buttons.forEach(button => { button.disabled = true; });
+  content.querySelectorAll('input').forEach(input => { input.disabled = true; });
+  const feedback = document.getElementById('inspection-feedback');
+  if (feedback) feedback.textContent = 'Salvando inspeção… Não feche esta tela.';
+  let itemsWritten = false;
+  try {
+    // Check the server state before writing, so a repeated submission cannot duplicate checklist rows.
+    const { data: existing, error: statusError } = await supabaseClient.from('inspections')
+      .select('status').eq('id', activeInspection.id).single();
+    if (statusError) throw new Error(`Não foi possível verificar o estado da inspeção: ${statusError.message}`);
+    if (!existing || existing.status === 'COMPLETED') {
+      if (existing?.status === 'COMPLETED') {
+        content.innerHTML = `<div class="card"><h2>Inspeção ${activeInspection.code} já concluída</h2><p>O servidor confirmou que esta inspeção já foi concluída. Nenhum item foi gravado novamente.</p><button class="btn" onclick="inspectionsPage()">Voltar às inspeções</button></div>`;
+        activeInspection = null;
+        return;
+      }
+      throw new Error('A inspeção não foi encontrada. Nenhum item foi salvo.');
+    }
 
-  await supabaseClient.from('inspections').update({ status: 'COMPLETED' }).eq('id', activeInspection.id);
+    const { data: previousItems, error: previousItemsError } = await supabaseClient.from('inspection_items')
+      .select('id').eq('inspection_id', activeInspection.id);
+    if (previousItemsError) throw new Error(`Não foi possível verificar itens já salvos: ${previousItemsError.message}`);
+    if (previousItems?.length) throw new Error('Já existem itens vinculados a esta inspeção. Para evitar duplicidade, ela não será reenviada; confira o registro na lista.');
 
-  const { data: ncsGenerated } = await supabaseClient.from('non_conformities').select('code').eq('inspection_id', activeInspection.id);
-  const count = ncsGenerated ? ncsGenerated.length : 0;
-  const photos = items.filter(i => i.photo_url);
+    const items = activeInspection.items.map((description, i) => ({
+      inspection_id: activeInspection.id,
+      description,
+      result: document.querySelector(`input[name="i${i}"]:checked`).value,
+    }));
 
-  title.textContent = 'Inspeção concluída';
-  content.innerHTML = `<div class="card"><h2>Inspeção ${activeInspection.code} registrada</h2>
-    <p>${count > 0 ? `${count} não conformidade(s) foram geradas automaticamente a partir dos itens marcados como "Não conforme".` : 'Nenhuma não conformidade foi identificada nesta inspeção.'}</p>
-    ${photos.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">${photos.map(p => `<img src="${p.photo_url}" style="width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #e2e7eb">`).join('')}</div>` : ''}
-    <button class="btn" onclick="dashboard()">Voltar ao dashboard</button></div>`;
-  activeInspection = null;
+    const { error: itemsError } = await supabaseClient.from('inspection_items').insert(items);
+    if (itemsError) throw new Error(`Erro ao salvar os itens: ${itemsError.message}`);
+    itemsWritten = true;
+
+    const { data: completed, error: updateError } = await supabaseClient.from('inspections')
+      .update({ status: 'COMPLETED' }).eq('id', activeInspection.id).select('id,status').single();
+    if (updateError || completed?.status !== 'COMPLETED') {
+      throw new Error(`Os itens foram salvos, mas o servidor não confirmou a conclusão${updateError ? `: ${updateError.message}` : '.'}`);
+    }
+
+    const { data: ncsGenerated, error: ncsError } = await supabaseClient.from('non_conformities')
+      .select('code').eq('inspection_id', activeInspection.id);
+    const count = ncsGenerated ? ncsGenerated.length : 0;
+    const photos = items.filter(i => i.photo_url);
+    title.textContent = 'Inspeção concluída';
+    content.innerHTML = `<div class="card"><h2>Inspeção ${activeInspection.code} registrada</h2>
+      <p>${count > 0 ? `${count} não conformidade(s) foram geradas automaticamente a partir dos itens marcados como "Não conforme".` : 'Inspeção concluída.'}${ncsError ? ' Não foi possível carregar a contagem de não conformidades; confira a lista de NCs.' : ''}</p>
+      ${photos.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">${photos.map(p => `<img src="${p.photo_url}" style="width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #e2e7eb">`).join('')}</div>` : ''}
+      <button class="btn" onclick="dashboard()">Voltar ao dashboard</button></div>`;
+    activeInspection = null;
+  } catch (error) {
+    console.error('Falha ao concluir inspeção:', error);
+    const message = itemsWritten
+      ? 'Os itens já foram enviados, mas a confirmação final falhou. Para evitar duplicidade, não tente concluir novamente; atualize a lista de inspeções e confira o status antes de qualquer nova ação.'
+      : `A inspeção não foi concluída: ${error.message}`;
+    content.innerHTML = `<div class="empty" role="alert"><strong>Não foi possível concluir a inspeção.</strong><p>${message}</p><button class="btn secondary" onclick="inspectionsPage()">Voltar à lista sem reenviar</button></div>`;
+    // After any successful item insert, retain the lock: a retry could duplicate items/NCs.
+    if (!itemsWritten) {
+      finishingInspection = false;
+      buttons.forEach(button => { button.disabled = false; });
+      content.querySelectorAll('input').forEach(input => { input.disabled = false; });
+    }
+  }
 }
 
 // ================== Navegação ==================
