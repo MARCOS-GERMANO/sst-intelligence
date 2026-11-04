@@ -49,3 +49,12 @@ input,select,textarea{accent-color:#176e5d}
 @media(max-width:390px){.hero-icon{display:none}.metric-grid{gap:8px}.metric-tile{padding:12px;min-height:138px}.metric-tile strong{font-size:23px}.team-strip{align-items:flex-start;flex-wrap:wrap}.team-strip>div{min-width:58%}.team-strip .text-link{margin-left:44px}}
 @media(prefers-reduced-transparency:reduce){aside{backdrop-filter:none;-webkit-backdrop-filter:none}}
 @media(prefers-reduced-motion:reduce){.metric-tile,.nav,.dashboard-panel,.inspection-item{transition:none}.nav:hover,.metric-tile:hover{transform:none}}
+
+/* Account identity sits quietly in the sidebar; product chrome stays focused. */
+.profile-card{display:grid;grid-template-columns:38px minmax(0,1fr) 36px;align-items:center;gap:10px;margin-top:auto;padding:13px 10px;border:1px solid rgba(165,224,211,.17);border-radius:16px;background:linear-gradient(145deg,rgba(255,255,255,.075),rgba(255,255,255,.025));box-shadow:inset 0 1px rgba(255,255,255,.06)}
+.profile-mark{width:36px;height:36px;display:grid;place-items:center;border-radius:12px;background:linear-gradient(145deg,#8be0c3,#398e82);color:#102a2b;font-size:11px;font-weight:850;box-shadow:0 4px 14px rgba(40,150,131,.2)}
+.profile-copy{min-width:0}.profile-copy strong,.profile-copy small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.profile-copy strong{font-size:11px;color:#eff8f6}.profile-copy small{font-size:9px;letter-spacing:.08em;color:#a9c6c3;margin-top:4px}
+.profile-actions{display:flex;align-items:center;justify-content:center;min-width:0}.profile-name{display:none}.logout-button{width:34px;height:34px;border:1px solid rgba(177,218,211,.18);border-radius:11px;background:rgba(255,255,255,.06);color:#d9eee9;font-size:17px;cursor:pointer;transition:background .18s ease,transform .18s ease}.logout-button:hover{background:rgba(255,255,255,.14);transform:translateY(-1px)}
+header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}header h1{margin-bottom:24px}.user{display:none!important}.side-foot{display:none}
+@media(max-width:850px){.profile-card{display:flex;position:fixed;top:calc(10px + env(safe-area-inset-top));right:12px;margin:0;padding:5px;gap:6px;border-radius:12px;background:#153c3b;box-shadow:0 5px 18px rgba(0,0,0,.17);z-index:60}.profile-mark,.profile-copy{display:none}.logout-button{width:38px;height:38px}header{align-items:flex-start;padding-right:58px}header h1{font-size:26px;margin-bottom:18px}}
+@media(prefers-reduced-motion:reduce){.logout-button{transition:none}}

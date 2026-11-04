@@ -67,8 +67,12 @@ async function isAccessExpired() {
 async function loadUserInfo() {
   const { data } = await supabaseClient.from('profiles').select('full_name, role').eq('id', currentUser.id).single();
   const name = data?.full_name || currentUser.email;
-  const role = data?.role ? data.role.toUpperCase() : '';
-  userInfo.innerHTML = `${name} <span>${role}</span> <button id="logout-btn">Sair</button>`;
+  const role = data?.role ? data.role.toUpperCase() : 'USUÁRIO';
+  userInfo.innerHTML = `<button class="logout-button" id="logout-btn" aria-label="Sair da conta" title="Sair">↗</button>`;
+  const profileName = document.querySelector(".profile-copy strong");
+  if (profileName) { profileName.textContent = name; profileName.title = name; }
+  const profileRole = document.getElementById('profile-role');
+  if (profileRole) profileRole.textContent = role;
   document.getElementById('logout-btn').onclick = () => supabaseClient.auth.signOut();
 }
 
