@@ -83,22 +83,22 @@ loginForm.addEventListener('submit', async (e) => {
 // ================== Acesso a dados ==================
 async function fetchSites() {
   const { data, error } = await supabaseClient.from('sites').select('*').order('created_at');
-  if (error) console.error(error);
+  if (error) throw error;
   return data || [];
 }
 async function fetchWorkers() {
   const { data, error } = await supabaseClient.from('workers').select('*, sites(name)').order('created_at');
-  if (error) console.error(error);
+  if (error) throw error;
   return data || [];
 }
 async function fetchInspections() {
   const { data, error } = await supabaseClient.from('inspections').select('*, sites(name)').order('created_at', { ascending: false });
-  if (error) console.error(error);
+  if (error) throw error;
   return data || [];
 }
 async function fetchNCs() {
   const { data, error } = await supabaseClient.from('non_conformities').select('*, sites(name)').order('created_at', { ascending: false });
-  if (error) console.error(error);
+  if (error) throw error;
   return data || [];
 }
 
@@ -131,7 +131,9 @@ function exportPDF() { window.print(); }
 async function dashboard() {
   title.textContent = 'Dashboard';
   loading();
-  const [sites, workers, inspections, ncs] = await Promise.all([fetchSites(), fetchWorkers(), fetchInspections(), fetchNCs()]);
+  let sites, workers, inspections, ncs;
+  try { [sites, workers, inspections, ncs] = await Promise.all([fetchSites(), fetchWorkers(), fetchInspections(), fetchNCs()]); }
+  catch (error) { content.innerHTML = '<div class="empty" role="alert"><strong>Não foi possível carregar os dados.</strong><p>Confira a conexão e tente novamente.</p><button class="btn secondary" onclick="dashboard()">Tentar novamente</button></div>'; return; }
   const activeSites = sites.filter(s => s.status === 'Ativa').length;
   const activeWorkers = workers.filter(w => w.status === 'Ativo').length;
   const thisMonth = new Date().toISOString().slice(0, 7);
@@ -142,20 +144,17 @@ async function dashboard() {
   const overdue = openNCs.filter(n => n.due_date && n.due_date < today).length;
   const rows = openNCs.slice(0, 5).map(n => [n.code, n.sites?.name || '-', n.description, n.priority, n.status]);
 
-  content.innerHTML = `<div class="grid">
-    <div class="card"><div class="label">OBRAS ATIVAS</div><div class="metric">${activeSites}</div></div>
-    <div class="card"><div class="label">TRABALHADORES ATIVOS</div><div class="metric">${activeWorkers}</div></div>
-    <div class="card"><div class="label">INSPEÇÕES NO MÊS</div><div class="metric">${inspectionsThisMonth}</div></div>
-    <div class="card"><div class="label">NCs ABERTAS</div><div class="metric danger">${openNCs.length}</div></div>
-  </div>
-  <div class="section"><h2>Indicadores de controle</h2><div class="grid">
-    <div class="card"><div class="label">CRÍTICAS</div><div class="metric danger">${critical}</div></div>
-    <div class="card"><div class="label">ATRASADAS</div><div class="metric danger">${overdue}</div></div>
-    <div class="card"><div class="label">RESOLVIDAS</div><div class="metric success">${ncs.length - openNCs.length}</div></div>
-    <div class="card"><div class="label">OBRAS</div><div class="metric">${sites.length}</div></div>
-  </div></div>
-  <div class="section"><h2>NCs por mês</h2><div class="card"><canvas id="ncs-chart" height="90"></canvas></div></div>
-  <div class="section"><h2>Últimas não conformidades</h2>${table(rows, ['Código', 'Obra', 'Descrição', 'Prioridade', 'Status'])}</div>`;
+  const safe = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const pending = overdue + critical;
+  content.innerHTML = `<div class="hero"><div><div class="hero-eyebrow">VISÃO GERAL · SEGURANÇA EM CAMPO</div><h2>${openNCs.length ? 'Sua operação em foco' : 'Tudo começa com uma inspeção'}</h2><p>${openNCs.length ? `${openNCs.length} ocorrência(s) em aberto. Acompanhe as prioridades e mantenha sua equipe segura.` : 'Registre inspeções e acompanhe a segurança da equipe em um só lugar.'}</p><button class="hero-action" onclick="newInspection()">＋ Nova inspeção</button></div><div class="hero-icon" aria-hidden="true">✦</div></div>
+  <div class="section-heading"><div><span class="section-kicker">PANORAMA</span><h2>O que precisa de atenção</h2></div></div>
+  <div class="metric-grid"><button class="metric-tile critical-tile" onclick="ncsPage()"><span class="metric-symbol">!</span><span class="metric-label">NCs abertas</span><strong>${openNCs.length}</strong><small>Ver ocorrências →</small></button>
+  <button class="metric-tile" onclick="ncsPage()"><span class="metric-symbol amber-icon">◷</span><span class="metric-label">Em atraso</span><strong>${overdue}</strong><small>Consultar prazos →</small></button>
+  <button class="metric-tile" onclick="inspectionsPage()"><span class="metric-symbol blue-icon">✓</span><span class="metric-label">Inspeções no mês</span><strong>${inspectionsThisMonth}</strong><small>Ver inspeções →</small></button>
+  <button class="metric-tile" onclick="sitesPage()"><span class="metric-symbol green-icon">⌂</span><span class="metric-label">Obras ativas</span><strong>${activeSites}</strong><small>Ver obras →</small></button></div>
+  <div class="dashboard-panels"><section class="dashboard-panel"><div class="panel-heading"><div><span class="section-kicker">ACOMPANHAMENTO</span><h2>Últimas ocorrências</h2></div><button class="text-link" onclick="ncsPage()">Ver todas →</button></div>${openNCs.length ? `<div class="occurrence-list">${openNCs.slice(0,4).map(n => `<div class="occurrence"><span class="occurrence-dot ${n.priority === 'CRITICAL' || n.priority === 'HIGH' ? 'hot' : ''}"></span><div><strong>${safe(n.description)}</strong><small>${safe(n.sites?.name || 'Obra não informada')} · ${safe(n.code)}</small></div><span class="badge ${n.priority === 'CRITICAL' ? 'red' : n.priority === 'HIGH' ? 'amber' : ''}">${safe(({CRITICAL:'Crítica',HIGH:'Alta',MEDIUM:'Média',LOW:'Baixa'})[n.priority] || n.priority)}</span></div>`).join('')}</div>` : `<div class="empty dashboard-empty"><span aria-hidden="true">✓</span><strong>Nenhuma ocorrência em aberto</strong><p>Quando houver não conformidades, elas aparecem aqui.</p></div>`}</section>
+  <section class="dashboard-panel"><div class="panel-heading"><div><span class="section-kicker">EVOLUÇÃO</span><h2>Ocorrências por mês</h2></div></div>${ncs.length ? '<div class="chart-wrap"><canvas id="ncs-chart" height="170"></canvas></div>' : '<div class="empty dashboard-empty"><span aria-hidden="true">▥</span><strong>Seu histórico começa aqui</strong><p>O gráfico aparece assim que houver ocorrências registradas.</p></div>'}</section></div>
+  <div class="team-strip"><span class="metric-symbol green-icon">♙</span><div><strong>${activeWorkers} trabalhador(es) ativos</strong><small>Acompanhe a equipe e suas obras</small></div><button class="text-link" onclick="workersPage()">Ver equipe →</button></div>`;
 
   renderNCsChart(ncs);
 }
@@ -195,7 +194,8 @@ function renderNCsChart(ncs) {
 async function sitesPage() {
   title.textContent = 'Obras';
   loading();
-  const sites = await fetchSites();
+  let sites;
+  try { sites = await fetchSites(); } catch (error) { content.innerHTML = '<div class="empty" role="alert"><strong>Não foi possível carregar os dados.</strong><p>Confira a conexão e tente novamente.</p></div>'; return; }
   content.innerHTML = `<div class="actions"><button class="btn" onclick="newSite()">+ Novo registro</button></div>${sitesTable(sites)}`;
 }
 
@@ -262,7 +262,8 @@ async function updateSite(id) {
 async function workersPage() {
   title.textContent = 'Trabalhadores';
   loading();
-  const workers = await fetchWorkers();
+  let workers;
+  try { workers = await fetchWorkers(); } catch (error) { content.innerHTML = '<div class="empty" role="alert"><strong>Não foi possível carregar os dados.</strong><p>Confira a conexão e tente novamente.</p></div>'; return; }
   content.innerHTML = `<div class="actions"><button class="btn" onclick="newWorker()">+ Novo registro</button></div>${workersTable(workers)}`;
 }
 
@@ -277,7 +278,8 @@ function workersTable(workers) {
 async function newWorker() {
   title.textContent = 'Novo trabalhador';
   loading();
-  const sites = await fetchSites();
+  let sites;
+  try { sites = await fetchSites(); } catch (error) { content.innerHTML = '<div class="empty" role="alert"><strong>Não foi possível carregar os dados.</strong><p>Confira a conexão e tente novamente.</p></div>'; return; }
   content.innerHTML = `<div class="form">
     <label>Nome<input id="worker-name" placeholder="Nome completo"></label>
     <label>Função<input id="worker-role" placeholder="Ex.: Pedreiro"></label>
@@ -334,7 +336,8 @@ async function updateWorker(id) {
 async function ncsPage() {
   title.textContent = 'Não conformidades';
   loading();
-  const ncs = await fetchNCs();
+  let ncs;
+  try { ncs = await fetchNCs(); } catch (error) { content.innerHTML = '<div class="empty" role="alert"><strong>Não foi possível carregar os dados.</strong><p>Confira a conexão e tente novamente.</p></div>'; return; }
   window._ncsData = ncs;
   content.innerHTML = `<div class="actions"><button class="btn secondary" onclick="exportNCsCSV()">Exportar CSV</button><button class="btn secondary" onclick="exportPDF()">Exportar PDF</button></div>${ncsTable(ncs)}`;
 }
@@ -379,7 +382,8 @@ async function updateNCStatus(id, status) {
 async function inspectionsPage() {
   title.textContent = 'Inspeções';
   loading();
-  const inspections = await fetchInspections();
+  let inspections;
+  try { inspections = await fetchInspections(); } catch (error) { content.innerHTML = '<div class="empty" role="alert"><strong>Não foi possível carregar os dados.</strong><p>Confira a conexão e tente novamente.</p></div>'; return; }
   window._inspectionsData = inspections;
   const rows = inspections.map(i => [i.code, i.sites?.name || '-', i.checklist_type, i.inspection_date, i.status]);
   content.innerHTML = `<div class="actions"><button class="btn" onclick="newInspection()">+ Nova inspeção</button><button class="btn secondary" onclick="exportInspectionsCSV()">Exportar CSV</button><button class="btn secondary" onclick="exportPDF()">Exportar PDF</button></div>${table(rows, ['Código', 'Obra', 'Tipo', 'Data', 'Status'])}`;
@@ -393,7 +397,8 @@ function exportInspectionsCSV() {
 async function newInspection() {
   title.textContent = 'Nova inspeção';
   loading();
-  const sites = await fetchSites();
+  let sites;
+  try { sites = await fetchSites(); } catch (error) { content.innerHTML = '<div class="empty" role="alert"><strong>Não foi possível carregar os dados.</strong><p>Confira a conexão e tente novamente.</p></div>'; return; }
   content.innerHTML = `<div class="form">
     <label>Obra<select id="insp-site">${sites.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}</select></label>
     <label>Checklist<select id="insp-checklist">${Object.keys(CHECKLISTS).map(name => `<option value="${name}">${name}</option>`).join('')}</select></label>
@@ -417,13 +422,32 @@ async function startChecklist() {
 
   activeInspection = { id: data.id, code: data.code, items: CHECKLISTS[checklist_type] || [] };
   title.textContent = `Checklist — ${checklist_type}`;
-  content.innerHTML = `<div class="card"><div class="label">INSPEÇÃO ${data.code} · EM ANDAMENTO</div>${activeInspection.items.map((x, i) => `<div style="padding:18px 0;border-bottom:1px solid #edf0f2"><b>${i + 1}. ${x}</b><div style="margin-top:10px">
-    <label><input type="radio" name="i${i}" value="conforme" checked> Conforme</label> &nbsp;
-    <label><input type="radio" name="i${i}" value="nao_conforme"> <span class="danger">Não conforme</span></label> &nbsp;
-    <label><input type="radio" name="i${i}" value="na"> N/A</label>
-    <div style="margin-top:8px"><input type="file" id="photo${i}" accept="image/*"></div>
-  </div></div>`).join('')}<br><button class="btn" onclick="finishInspection()">Finalizar inspeção</button></div>`;
+  content.innerHTML = `<div class="inspection-head"><span class="section-kicker">INSPEÇÃO ${data.code} · EM ANDAMENTO</span><h2>Vamos conferir a segurança?</h2><p>Escolha uma resposta para cada item. Você poderá revisar antes de concluir.</p><div class="progress-row"><span id="inspection-progress">0 de ${activeInspection.items.length} respondidos</span><span id="inspection-percent">0%</span></div><div class="progress-track"><div id="inspection-progress-bar"></div></div></div>
+  <div class="inspection-list">${activeInspection.items.map((x, i) => `<fieldset class="inspection-item"><legend><span class="item-number">${i+1}</span> ${x}</legend><div class="answer-options">
+    <label><input type="radio" name="i${i}" value="conforme" onchange="updateInspectionProgress()"><span>✓ Conforme</span></label>
+    <label><input type="radio" name="i${i}" value="nao_conforme" onchange="updateInspectionProgress()"><span>! Não conforme</span></label>
+    <label><input type="radio" name="i${i}" value="na" onchange="updateInspectionProgress()"><span>— Não se aplica</span></label></div>
+    <label class="photo-label">📷 Adicionar foto <input type="file" id="photo${i}" accept="image/*" capture="environment"></label></fieldset>`).join('')}</div><div class="inspection-footer"><p id="inspection-feedback" role="status">Responda todos os itens para revisar.</p><button class="btn" onclick="reviewInspection()">Revisar inspeção →</button></div>`;
 }
+
+function updateInspectionProgress() {
+  if (!activeInspection) return;
+  const answered = activeInspection.items.filter((_, i) => document.querySelector(`input[name="i${i}"]:checked`)).length;
+  const pct = Math.round(answered * 100 / activeInspection.items.length);
+  document.getElementById('inspection-progress').textContent = `${answered} de ${activeInspection.items.length} respondidos`;
+  document.getElementById('inspection-percent').textContent = `${pct}%`;
+  document.getElementById('inspection-progress-bar').style.width = `${pct}%`;
+  document.getElementById('inspection-feedback').textContent = answered === activeInspection.items.length ? 'Tudo respondido. Revise antes de concluir.' : 'Responda todos os itens para revisar.';
+}
+function reviewInspection() {
+  const missing = activeInspection.items.findIndex((_, i) => !document.querySelector(`input[name="i${i}"]:checked`));
+  if (missing !== -1) { document.getElementById('inspection-feedback').textContent = `Falta responder o item ${missing + 1}.`; document.querySelector(`input[name="i${missing}"]`).focus(); return; }
+  const counts = {conforme:0, nao_conforme:0, na:0};
+  activeInspection.items.forEach((_,i) => counts[document.querySelector(`input[name="i${i}"]:checked`).value]++);
+  if (window.confirm(`Revisão: ${counts.conforme} conforme(s), ${counts.nao_conforme} não conforme(s), ${counts.na} não se aplica. Finalizar a inspeção?`)) finishInspection();
+}
+window.updateInspectionProgress = updateInspectionProgress;
+window.reviewInspection = reviewInspection;
 
 async function uploadPhoto(file, inspectionId, index) {
   if (!file) return null;
@@ -435,6 +459,7 @@ async function uploadPhoto(file, inspectionId, index) {
 }
 
 async function finishInspection() {
+  if (!activeInspection || activeInspection.items.some((_, i) => !document.querySelector(`input[name="i${i}"]:checked`))) { alert('Responda todos os itens antes de finalizar.'); return; }
   const items = [];
   for (let i = 0; i < activeInspection.items.length; i++) {
     const description = activeInspection.items[i];
@@ -465,6 +490,8 @@ async function finishInspection() {
 // ================== Navegação ==================
 window.newInspection = newInspection;
 window.startChecklist = startChecklist;
+window.inspectionsPage = inspectionsPage;
+window.ncsPage = ncsPage;
 window.finishInspection = finishInspection;
 window.dashboard = dashboard;
 window.sitesPage = sitesPage;
