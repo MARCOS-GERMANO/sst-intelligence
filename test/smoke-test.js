@@ -15,6 +15,7 @@ const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost
 const { window } = dom;
 window.onerror = (msg) => errors.push('window.onerror: ' + msg);
 window.alert = (msg) => errors.push('alert() chamado inesperadamente: ' + msg);
+window.confirm = () => true;
 
 // ---- Supabase falso: dados fixos, sem chamadas de rede ----
 const fakeData = {
@@ -23,27 +24,40 @@ const fakeData = {
   inspections: [{ id: 'i1', code: 'INS-00001', checklist_type: 'NR-18', inspection_date: '2026-08-01', status: 'COMPLETED', sites: { name: 'Obra Teste' } }],
   non_conformities: [{ id: 'nc1', code: 'NC-2026-000001', description: 'Teste', priority: 'MEDIUM', status: 'OPEN', sites: { name: 'Obra Teste' } }],
   profiles: [{ id: 'u1', full_name: 'Usuário Teste', role: 'tecnico' }],
+  inspection_items: [],
 };
 
 function makeBuilder(tableName) {
-  let mode = 'select';
-  const b = {
-    select() { return b; },
-    eq() { return b; },
-    order() { return b; },
-    insert() { mode = 'insert'; return b; },
-    update() { mode = 'update'; return b; },
-    single() {
-      if (mode === 'insert') return Promise.resolve({ data: { id: 'new-id', code: 'INS-99999' }, error: null });
-      const arr = fakeData[tableName] || [];
-      return Promise.resolve({ data: arr[0] || null, error: null });
+  let mode='select', payload=null, filters=[];
+  const matches = row => filters.every(([key,value]) => row[key]===value);
+  function rows() { return fakeData[tableName] || []; }
+  const builder={
+    select(){return builder;}, order(){return builder;}, eq(key,value){filters.push([key,value]);return builder;},
+    insert(value){mode='insert';payload=value;return builder;}, update(value){mode='update';payload=value;return builder;},
+    single(){
+      if(mode==='insert') {
+        const record=Array.isArray(payload)?payload[0]:payload;
+        const created={id:'new-id',code:'INS-99999',status:'IN_PROGRESS',...record};
+        if(tableName==='inspections') fakeData.inspections.push(created);
+        return Promise.resolve({data:created,error:null});
+      }
+      if(mode==='update') {
+        const record=rows().find(matches); if(record) Object.assign(record,payload);
+        return Promise.resolve({data:record||null,error:null});
+      }
+      return Promise.resolve({data:rows().find(matches)||null,error:null});
     },
-    then(resolve, reject) {
-      const data = mode === 'insert' ? [] : (fakeData[tableName] || []);
-      return Promise.resolve({ data, error: null }).then(resolve, reject);
-    },
-  };
-  return b;
+    then(resolve,reject){
+      let data;
+      if(mode==='insert') {
+        const records=(Array.isArray(payload)?payload:[payload]).map((r,i)=>({id:`new-${i}`,...r}));
+        if(tableName==='inspection_items') fakeData.inspection_items.push(...records);
+        data=records;
+      } else if(mode==='update') { data=rows().filter(matches); data.forEach(r=>Object.assign(r,payload)); }
+      else data=rows().filter(matches);
+      return Promise.resolve({data,error:null}).then(resolve,reject);
+    }
+  }; return builder;
 }
 
 window.supabase = {
